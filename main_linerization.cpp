@@ -140,6 +140,8 @@ int main()
 	int size = N * (N_t + 1);
 	int n = N;
 	int m = M;
+	int nprm = N_prm;
+	int nt1 = N_t + 1;
 
 	double *k1, *k2, *k3, *k4; // vectors of Runge-Kutta method
 
@@ -169,7 +171,7 @@ int main()
 
 	X_exact = new double*[n];
 	for (int i = 0; i < n; i++)
-		X_exact[i] = new double[N_t + 1]; // since 0 to N_t
+		X_exact[i] = new double[nt1]; // since 0 to N_t
 
 	const double b11 = 0.7, b12 = 0.6, b21 = 0.4, X10 = 1.6, X20 = 1.7; //unknown parameters
 
@@ -178,8 +180,8 @@ int main()
 	y_init[1] = X20;
 
 	double *prm_app, *prm_ex;
-	prm_ex = new double[N_prm];
-	prm_app = new double[N_prm];
+	prm_ex = new double[nprm];
+	prm_app = new double[nprm];
 
 	prm_ex[0] = b11; prm_ex[1] = b12; prm_ex[2] = b21; prm_ex[3] = X10; prm_ex[4] = X20;
 
@@ -194,7 +196,7 @@ int main()
 	double t_k;
 	out = fopen("DP_output_before.dat", "w");
 
-	for (int k = 0; k < N_t + 1; k++)
+	for (int k = 0; k < nt1; k++)
 	{
 		t_k = k*h_t;
 		fprintf(out, "%5.4lf %lf %lf \n", t_k, X_exact[0][k], X_exact[1][k]);
@@ -205,7 +207,7 @@ int main()
 
 	/**************************************/
 	printf("\nSizes of matrices:\n");
-	printf("A: %d x %d\nq: %d x %d\nf: %d x %d\n", size, N_prm, N_prm, 1, size, 1);
+	printf("A: %d x %d\nq: %d x %d\nf: %d x %d\n", size, nprm, nprm, 1, size, 1);
 
 	printf("\nMesh:\n%4d\n", int(N_t));
 
@@ -216,11 +218,11 @@ int main()
 	// for discretization
 
 	double* A;
-	A = new double[size * N_prm];
+	A = new double[size * nprm];
 
-	int lda = N_prm; // a[i][j]=a[i*lda+j]
-	int ldm = N;
-	int ldp = M;
+	int lda = nprm; // a[i][j]=a[i*lda+j]
+	int ldm = n;
+	int ldp = m;
 
 	double *M_i, *P_i;
 	M_i = new double[n * ldm];
@@ -235,15 +237,15 @@ int main()
 
 	// for SVD
 
-	double sing[N_prm];
-	double *u, *vt, *superb;
+	double *sing, *u, *vt, *superb;
 
 	int ldu = size;
-	int ldvt = N_prm;
+	int ldvt = nprm;
 
+	sing = new double[nprm];
 	u = new double[size * ldu];
-	vt = new double[N_prm * ldvt];
-	superb = new double[N_prm];
+	vt = new double[nprm * ldvt];
+	superb = new double[nprm];
 
 	// for Direct Problem solutions
 
@@ -254,20 +256,20 @@ int main()
 
 	for (int i = 0; i < n; i++)
 	{
-		X_app[i] = new double[N_t + 1]; // since 0 to N_t
-		X_meas[i] = new double[N_t + 1];
-		X_app_meas[i] = new double[N_t + 1]; // since 0 to N_t
+		X_app[i] = new double[nt1]; // since 0 to N_t
+		X_meas[i] = new double[nt1];
+		X_app_meas[i] = new double[nt1]; // since 0 to N_t
 	}
 
 	// for linear interpolation and SVD
 	double *f, *g, *q, *z;
-	q = new double[N_prm];
-	z = new double[N_prm];
+	q = new double[nprm];
+	z = new double[nprm];
 	f = new double[size];
 	g = new double[size];
 
-	clear_arr_sm(N_prm, q);
-	clear_arr_sm(N_prm, z);
+	clear_arr_sm(nprm, q);
+	clear_arr_sm(nprm, z);
 	clear_arr_bg(size, f);
 	clear_arr_bg(size, g);
 
@@ -317,8 +319,13 @@ int main()
 
 		/*********Linear interpolation of measurements****/
 
-		X_meas[0:N][0:N_t + 1] = 0;
-		X_app_meas[0:N][0:N_t + 1] = 0;
+		for (int i = 0; i < n; i++)
+#pragma omp parallel for simd schedule(simd:static)
+			for (int j = 0; j < nt1; j++)
+			{
+				X_meas[i][j] = 0;
+				X_app_meas[i][j] = 0;
+			}
 
 		h_meas = int(N_t) / int(N_meas);
 		printf("h_meas: %d\n", h_meas);
@@ -347,7 +354,7 @@ int main()
 
 		/*********Construting of matrix A********/
 
-		clear_arr_bg(size * N_prm, A);
+		clear_arr_bg(size * nprm, A);
 		clear_arr_sm(n * ldm, M_res);
 		clear_arr_sm(n * ldm, M_i);
 		clear_arr_sm(n * ldp, P_res);
@@ -355,12 +362,12 @@ int main()
 		clear_arr_sm(n * ldm, M_help);
 
 
-		for (int i = 0; i < N; i++)
+		for (int i = 0; i < n; i++)
 			M_res[i*ldm + i] = 1.0;
 
 		alpha = 0;
 
-		for (int j = 0; j < N_t + 1; j++)
+		for (int j = 0; j < nt1; j++)
 		{
 
 			M_i[0 * ldm + 0] = 1 + h_t*(prm_app[0] - prm_app[1] * X_app[1][j]);
@@ -409,21 +416,17 @@ int main()
 
 			fclose(out1);
 		}
-		//system("pause");
         
 		
 		// SVD decomposition
-
-		LAPACKE_dgesvd(LAPACK_ROW_MAJOR, 'A', 'A', size, N_prm, A, lda, sing, u, ldu, vt, ldvt, superb);
+		LAPACKE_dgesvd(LAPACK_ROW_MAJOR, 'A', 'A', size, nprm, A, lda, sing, u, ldu, vt, ldvt, superb);
 
 		// singular values in array SING; arrays U and VT - ortogonal matrices from U * SIGMA * VT * q = f
-
 		printf("\nSingular values:\n");
-		for (int i = 0; i < N_prm; i++)
+		for (int i = 0; i < nprm; i++)
 			printf("%5.4lf\n", sing[i]);
 
 		// fulfilling of right part F
-
 #pragma omp parallel for simd schedule(simd:static)
 		for (int i = 0; i < size; i++)
 		{
@@ -439,7 +442,7 @@ int main()
 		if (iter == 1)
 		{
 			out1 = fopen("N1_N2_interpolation_size_101_meas_5.dat", "w");
-			for (int i = 0; i < (N_t + 1); i++)
+			for (int i = 0; i < nt1; i++)
 			{
 				fprintf(out1, "%12.9lf %12.9lf %12.9lf %12.9lf %12.9lf %12.9lf\n", X_meas[0][i], X_meas[1][i], X_app_meas[0][i], X_app_meas[1][i], X_meas[0][i]-X_app_meas[0][i],X_meas[1][i]-X_app_meas[1][i]);
 			}
@@ -460,10 +463,10 @@ int main()
 				fprintf(out1,"\n");
 			}
 			fprintf(out1, "\n-------vt-------\n");
-			for (int i = 0; i < N_prm; i++)
+			for (int i = 0; i < nprm; i++)
 			{
 				fprintf(out1, "%d  ", i);
-				for (int j = 0; j < N_prm; j++)
+				for (int j = 0; j < nprm; j++)
 					fprintf(out1, "%7.4lf ", vt[i*ldvt + j]);
 				fprintf(out1, "\n");
 			}
@@ -475,27 +478,27 @@ int main()
 		cblas_dgemv(CblasRowMajor, CblasTrans, size, size, 1.0, u, ldu, f, 1, 0.0, g, 1);
 
 		// computing z[i] = g[i] / sing [i]
-		for (int i = 0; i < N_prm; i++)
+		for (int i = 0; i < nprm; i++)
 			z[i] = g[i] / sing[i];
 
 		// computing q = V * z
-		cblas_dgemv(CblasRowMajor, CblasTrans, N_prm, N_prm, 1.0, vt, ldvt, z, 1, 0.0, q, 1);
+		cblas_dgemv(CblasRowMajor, CblasTrans, nprm, nprm, 1.0, vt, ldvt, z, 1, 0.0, q, 1);
 
 		// result is in vector q
 		if (iter == 1)
 		{
 			printf("\nUnknown delta-vector of parameters q:\n");
-			for (int i = 0; i < N_prm; i++)
+			for (int i = 0; i < nprm; i++)
 			printf("%5.4lf\n", q[i]);
 		}
 
 		printf("\nUnknown vector of parameters q:\n");
-		for (int i = 0; i < N_prm; i++)
+		for (int i = 0; i < nprm; i++)
 			printf("gained: %5.4lf exact: %5.4lf\n", q[i] + prm_app[i], prm_ex[i]);
 
 		norm1 = 0, norm2 = 0;
 
-		for (int i = 0; i < N_prm; i++)
+		for (int i = 0; i < nprm; i++)
 		{
 			prm_app[i] = q[i] + prm_app[i];
 			norm1 += (prm_app[i] - prm_ex[i])*(prm_app[i] - prm_ex[i]);
@@ -531,7 +534,7 @@ int main()
 	delete[] P_res;
 	delete[] M_help;
 
-
+	delete[] sing;
 	delete[] u;
 	delete[] vt;
 	delete[] superb;
