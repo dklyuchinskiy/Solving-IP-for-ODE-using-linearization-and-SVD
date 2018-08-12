@@ -282,6 +282,9 @@ int main()
 	
 	timer1 = omp_get_wtime();
 
+	FILE* convergence;
+	convergence = fopen("conv.dat", "w");
+
 	do
 	{
 		iter++;
@@ -506,6 +509,8 @@ int main()
 		}
 			
 		norm1 = sqrt(norm1) / sqrt(norm2);
+
+		fprintf(convergence, "%d %lf\n", iter, norm1);
 		printf("norma %lf\n", norm1);
 		//if (iter == 1) system("pause");
 
@@ -515,7 +520,7 @@ int main()
 
 	printf("Time: %lf\n", timer2);
 
-
+	fclose(convergence);
 
 	delete[] k1;
 	delete[] k2;
