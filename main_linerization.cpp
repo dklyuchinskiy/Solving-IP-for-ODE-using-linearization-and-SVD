@@ -21,11 +21,12 @@
 
 #define pi 3.1415926535897932384626433832795
 
-void clear_array(int n, double* arr);
+void clear_arr_sm(int n, double* arr);
+void clear_arr_bg(int n, double* arr);
 
 void B(double t, double *x, double *prm/*input*/, double* f/*output*/)
 {
-	clear_array(N, f);
+	clear_arr_sm(N, f);
 
 	f[0] = x[0] * (prm[0] - prm[1] * x[1]);
 	f[1] = prm[2] * x[0] * x[1];
@@ -38,53 +39,64 @@ double Runge_Kutta(double *y0, double* y_k, double *prm, double *k1, double *k2,
 	int i, j, k;
 	double h_t;
 	double t_k;
-	double *help;
 
 	int n = N;
+	int nt1 = N_t + 1;
 	int ione = 1;
+
+	double *help;
 	help = new double[n];
 
-	double *f; //right part
-	f = new double[N];
+	double *f;		//right hand side
+	f = new double[n];
 
 	h_t = double(T) / double(N_t);
 
-	x[0:N][0:N_t + 1] = 0;
 
-	clear_array(N, y_k);
+	for(int i = 0; i < n; i++)
+#pragma omp parallel for simd schedule(simd:static)
+		for (int j = 0; j < nt1; j++)
+			x[i][j] = 0;
 
 	// initial conditions
 
-	x[0:N][0] = y0[0:N];
-
-	LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', 1, n, y0, n, y_k, n);
-	// y_k[0:N] : = y_k [0 * ldy + N]
+#pragma omp for simd
+	for (int i = 0; i < n; i++)
+	{
+		x[i][0] = y0[i];
+		y_k[i] = y0[i];
+	}
 
 	for (k = 0; k < N_t; k++)     // count is until the last point of T
 	{
-		t_k = k*h_t;
+		t_k = k * h_t;
 
 		B(t_k, y_k, prm, f); // massive of right parts transfer from function correctly
 		LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', 1, n, f, n, k1, n);
-	//	k1[0:N] = f[0:N];
 
-		help[0:N] = y_k[0:N] + h_t*k1[0:N] * 0.5;
-		B(t_k + h_t*0.5, help, prm, f);
+#pragma omp for simd
+		for(int i = 0; i < n; i++)
+			help[i] = y_k[i] + h_t * 0.5 * k1[i];
+
+		B(t_k + h_t * 0.5, help, prm, f);
 		LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', 1, n, f, n, k2, n);
-	//	k2[0:N] = f[0:N];
 
 
-		help[0:N] = y_k[0:N] + h_t*k2[0:N] * 0.5;
-		B(t_k + h_t*0.5, help, prm, f);
+#pragma omp for simd
+		for (int i = 0; i < n; i++)
+			help[i] = y_k[i] + h_t * 0.5 * k2[i];
+
+		B(t_k + h_t * 0.5, help, prm, f);
 		LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', 1, n, f, n, k3, n);
-	//	k3[0:N] = f[0:N];
+	
+#pragma omp for simd
+		for (int i = 0; i < n; i++)
+			help[i] = y_k[i] + h_t * k3[i];
 
-
-		help[0:N] = y_k[0:N] + h_t*k3[0:N];
 		B(t_k + h_t, help, prm, f);
 		LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', 1, n, f, n, k4, n);
-	//	k4[0:N] = f[0:N];
 
+#pragma omp for simd
 		for (int i = 0; i < N; i++)
 		{
 			x[i][k + 1] = x[i][k] + h_t*(k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) / double(6.0);
@@ -92,6 +104,9 @@ double Runge_Kutta(double *y0, double* y_k, double *prm, double *k1, double *k2,
 		}
 
 	}
+
+	delete[] f;
+	delete[] help;
 
 	return 0;
 }
@@ -101,9 +116,16 @@ double lin_inter(double x0, double fx0, double x1, double fx1, double x)
 	return (x - x0) / (x1 - x0) * (fx1 - fx0) + fx0;
 }
 
-void clear_array(int n, double* arr)
+void clear_arr_sm(int n, double* arr)
 {
 #pragma omp parallel for simd schedule(simd:static)
+	for (int i = 0; i < n; i++)
+		arr[i] = 0;
+}
+
+void clear_arr_bg(int n, double* arr)
+{
+#pragma omp for simd schedule(simd:static)
 	for (int i = 0; i < n; i++)
 		arr[i] = 0;
 }
@@ -135,10 +157,10 @@ int main()
 	k3 = new double[n];
 	k4 = new double[n];
 
-	clear_array(n, k1);
-	clear_array(n, k2);
-	clear_array(n, k3);
-	clear_array(n, k4);
+	clear_arr_sm(n, k1);
+	clear_arr_sm(n, k2);
+	clear_arr_sm(n, k3);
+	clear_arr_sm(n, k4);
 
 	double** X_exact; /* matrix of solution: y0 - t0, t1, t2, ... ,tN
 				y1 - t0, t1, t2, ..., tN
@@ -151,7 +173,7 @@ int main()
 
 	const double b11 = 0.7, b12 = 0.6, b21 = 0.4, X10 = 1.6, X20 = 1.7; //unknown parameters
 
-	clear_array(n, y);
+	clear_arr_sm(n, y);
 	y_init[0] = X10;
 	y_init[1] = X20;
 
@@ -244,6 +266,11 @@ int main()
 	f = new double[size];
 	g = new double[size];
 
+	clear_arr_sm(N_prm, q);
+	clear_arr_sm(N_prm, z);
+	clear_arr_bg(size, f);
+	clear_arr_bg(size, g);
+
 
 	/*********ITERATION STEPS********/
 	double norm1 = 0, norm2 = 0;
@@ -263,12 +290,11 @@ int main()
 			prm_app[0] = b11_app; prm_app[1] = b12_app; prm_app[2] = b21_app; prm_app[3] = X10_app; prm_app[4] = X20_app; // intitial approximations
 		}
 
-		y[0:N] = 0;
+		clear_arr_sm(n, y);
 		y_init[0] = prm_app[3];
 		y_init[1] = prm_app[4];
 
 		printf("Direct problem solution of approximate data...\n");
-
 
 		Runge_Kutta(y_init, y, prm_app, k1, k2, k3, k4, X_app);
 
@@ -285,19 +311,6 @@ int main()
 			}
 			fclose(out);
 		}
-
-	/*	if (iter == 2)
-		{
-			out = fopen("DP_app_output_after_meas_1000.dat", "w");
-
-			for (int k = 0; k < N_t + 1; k++)
-			{
-				t_k = k*h_t;
-				fprintf(out, "%5.4lf %lf %lf \n", t_k, X_app[0][k], X_app[1][k]);
-
-			}
-			fclose(out);
-		}*/
 
 
 		/*************************************************/
@@ -334,12 +347,12 @@ int main()
 
 		/*********Construting of matrix A********/
 
-		clear_array(size * N_prm, A);
-		clear_array(n * ldm, M_res);
-		clear_array(n * ldm, M_i);
-		clear_array(n * ldp, P_res);
-		clear_array(n * ldp, P_i);
-		clear_array(n * ldm, M_help);
+		clear_arr_bg(size * N_prm, A);
+		clear_arr_sm(n * ldm, M_res);
+		clear_arr_sm(n * ldm, M_i);
+		clear_arr_sm(n * ldp, P_res);
+		clear_arr_sm(n * ldp, P_i);
+		clear_arr_sm(n * ldm, M_help);
 
 
 		for (int i = 0; i < N; i++)
@@ -408,12 +421,6 @@ int main()
 		printf("\nSingular values:\n");
 		for (int i = 0; i < N_prm; i++)
 			printf("%5.4lf\n", sing[i]);
-
-		q[0:N_prm] = 0;
-		z[0:N_prm] = 0;
-		f[0:size] = 0;
-		g[0:size] = 0;
-
 
 		// fulfilling of right part F
 
@@ -486,11 +493,11 @@ int main()
 		for (int i = 0; i < N_prm; i++)
 			printf("gained: %5.4lf exact: %5.4lf\n", q[i] + prm_app[i], prm_ex[i]);
 
-		prm_app[0:N_prm] = q[0:N_prm]+prm_app[0:N_prm];
-
 		norm1 = 0, norm2 = 0;
+
 		for (int i = 0; i < N_prm; i++)
 		{
+			prm_app[i] = q[i] + prm_app[i];
 			norm1 += (prm_app[i] - prm_ex[i])*(prm_app[i] - prm_ex[i]);
 			norm2 += prm_ex[i] * prm_ex[i];
 		}
@@ -511,6 +518,43 @@ int main()
 	delete[] k2;
 	delete[] k3;
 	delete[] k4;
+
+	delete[] y;
+	delete[] y_init;
+
+	delete[] A;
+
+	delete[] M_i;
+	delete[] P_i;
+
+	delete[] M_res;
+	delete[] P_res;
+	delete[] M_help;
+
+
+	delete[] u;
+	delete[] vt;
+	delete[] superb;
+
+	delete[] f;
+	delete[] g;
+	delete[] q;
+	delete[] z;
+
+	for (int i = 0; i < n; i++)
+	{
+		delete[] X_app[i]; 
+		delete[] X_meas[i];
+		delete[] X_app_meas[i];
+		delete[] X_exact[i];
+	}
+
+	delete[] X_app;
+	delete[] X_meas;
+	delete[] X_app_meas;
+	delete[] X_exact;
+
+
 
 	system("pause");
 	return 0;
