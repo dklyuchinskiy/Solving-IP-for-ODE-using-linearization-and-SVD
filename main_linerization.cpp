@@ -97,7 +97,7 @@ double Runge_Kutta(double *y0, double* y_k, double *prm, double *k1, double *k2,
 		LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', 1, n, f, n, k4, n);
 
 #pragma omp for simd
-		for (int i = 0; i < N; i++)
+		for (int i = 0; i < n; i++)
 		{
 			x[i][k + 1] = x[i][k] + h_t*(k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) / double(6.0);
 			y_k[i] = x[i][k + 1];// for next step
@@ -173,15 +173,20 @@ int main()
 	for (int i = 0; i < n; i++)
 		X_exact[i] = new double[nt1]; // since 0 to N_t
 
-	const double b11 = 0.7, b12 = 0.6, b21 = 0.4, X10 = 1.6, X20 = 1.7; //unknown parameters
+	// unknown exact parameters (we need to recover it)
+	const double b11 = 0.7, b12 = 0.6, b21 = 0.4, X10 = 1.6, X20 = 1.7;
+
+	// initial approximation of parameters
+	const double b11_app = 0.5, b12_app = 0.5, b21_app = 0.6, X10_app = 1.8, X20_app = 1.8;
 
 	clear_arr_sm(n, y);
 	y_init[0] = X10;
 	y_init[1] = X20;
 
-	double *prm_app, *prm_ex;
+	double *prm_app, *prm_ex, *prm_diff;
 	prm_ex = new double[nprm];
 	prm_app = new double[nprm];
+	prm_diff = new double[nprm];
 
 	prm_ex[0] = b11; prm_ex[1] = b12; prm_ex[2] = b21; prm_ex[3] = X10; prm_ex[4] = X20;
 
@@ -200,7 +205,6 @@ int main()
 	{
 		t_k = k*h_t;
 		fprintf(out, "%5.4lf %lf %lf \n", t_k, X_exact[0][k], X_exact[1][k]);
-
 	}
 	fclose(out);
 
@@ -212,6 +216,9 @@ int main()
 	printf("\nMesh:\n%4d\n", int(N_t));
 
 	printf("\nMeasurements:\n%d\n", int(N_meas));
+
+	h_meas = int(N_t) / int(N_meas);
+	printf("\nh_meas: \n%d\n", h_meas);
 
 	system("pause");
 
@@ -228,15 +235,7 @@ int main()
 	M_i = new double[n * ldm];
 	P_i = new double[n * ldp];
 
-	double *M_res, *P_res;
-	M_res = new double[n * ldm];
-	P_res = new double[n * ldp];
-
-	double *M_help;
-	M_help = new double[n * ldm];
-
 	// for SVD
-
 	double *sing, *u, *vt, *superb;
 
 	int ldu = size;
@@ -279,20 +278,21 @@ int main()
 	int iter = 0;
 
 	double timer1, timer2;
-	
-	timer1 = omp_get_wtime();
 
 	FILE* convergence;
 	convergence = fopen("conv.dat", "w");
+
+	timer1 = omp_get_wtime();
 
 	do
 	{
 		iter++;
 		printf("\n****************\nIteration: %d\n", iter);
+
+		// initial approximations
 		if (iter == 1)
 		{
-			const double b11_app = 0.5, b12_app = 0.5, b21_app = 0.6, X10_app = 1.8, X20_app = 1.8;
-			prm_app[0] = b11_app; prm_app[1] = b12_app; prm_app[2] = b21_app; prm_app[3] = X10_app; prm_app[4] = X20_app; // intitial approximations
+			prm_app[0] = b11_app; prm_app[1] = b12_app; prm_app[2] = b21_app; prm_app[3] = X10_app; prm_app[4] = X20_app;
 		}
 
 		clear_arr_sm(n, y);
@@ -304,20 +304,20 @@ int main()
 		Runge_Kutta(y_init, y, prm_app, k1, k2, k3, k4, X_app);
 
 		/***********Printing***************/
+#ifdef DEBUG
 		if (iter == 1)
 		{
 			out = fopen("DP_app_output_before_meas_5.dat", "w");
 
-			for (int k = 0; k < N_t + 1; k++)
+			for (int k = 0; k < nt1; k++)
 			{
-				t_k = k*h_t;
+				t_k = k * h_t;
 				fprintf(out, "%5.4lf %lf %lf \n", t_k, X_app[0][k], X_app[1][k]);
 
 			}
 			fclose(out);
 		}
-
-
+#endif
 		/*************************************************/
 
 		/*********Linear interpolation of measurements****/
@@ -330,10 +330,8 @@ int main()
 				X_app_meas[i][j] = 0;
 			}
 
-		h_meas = int(N_t) / int(N_meas);
-		printf("h_meas: %d\n", h_meas);
-
-		// filling the measurements
+		// filling the measurements in N_meas points synthetically
+		// for exact and approximate data
 		for (int j = 0; j < N_meas + 1; j++)
 		{
 			X_meas[0][j*h_meas] = X_exact[0][j*h_meas];
@@ -355,24 +353,14 @@ int main()
 		}
 
 
-		/*********Construting of matrix A********/
-
 		clear_arr_bg(size * nprm, A);
-		clear_arr_sm(n * ldm, M_res);
-		clear_arr_sm(n * ldm, M_i);
-		clear_arr_sm(n * ldp, P_res);
-		clear_arr_sm(n * ldp, P_i);
-		clear_arr_sm(n * ldm, M_help);
-
-
-		for (int i = 0; i < n; i++)
-			M_res[i*ldm + i] = 1.0;
 
 		alpha = 0;
 
+		/*********Construting of matrix A********/
+
 		for (int j = 0; j < nt1; j++)
 		{
-
 			M_i[0 * ldm + 0] = 1 + h_t*(prm_app[0] - prm_app[1] * X_app[1][j]);
 			M_i[0 * ldm + 1] = -h_t*prm_app[1] * X_app[0][j];
 			M_i[1 * ldm + 0] = h_t*prm_app[2] * X_app[1][j];
@@ -387,21 +375,21 @@ int main()
 			P_i[1 * ldp + 2] = h_t*X_app[0][j] * X_app[1][j];
 
 
-			cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, n, n, n, 1.0, M_i, ldm, M_res, ldm, 0.0, M_help, ldm);
-			LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', n, n, M_help, ldm, M_res, ldm);
+			if (j == 0)
+			{
+				LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', n, n, M_i, ldm, &A[0 * n * lda + m], lda);
+				LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', n, m, P_i, ldp, &A[0 * n * lda], lda);
+			}
+			else
+			{
+				cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, n, n, n, 1.0, M_i, ldm, &A[(j - 1) * n * lda + m], lda, 0.0, &A[j * n * lda + m], lda);
+				cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, n, m, n, 1.0, M_i, ldm, &A[(j - 1) * n * lda], lda, 1.0, P_i, ldp);
+				LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', n, m, P_i, ldp, &A[j * n * lda], lda);
+			}
 
-			if (j == 0) alpha = 0.0;
-			else alpha = 1.0;
-
-			cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, n, m, n, alpha, M_i, ldm, P_res, ldp, 1.0, P_i, ldp);
-			LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', n, m, P_i, ldp, P_res, ldp);
-
-			// -------------------Fulfilling matrix A-----------------
-
-			LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', n, m, P_res, ldp, &A[j* n * lda], lda);
-			LAPACKE_dlacpy(LAPACK_ROW_MAJOR, 'A', n, n, M_res, ldm, &A[j* n * lda + m], lda);
 		}
 
+#ifdef DEBUG
 		// some output
 		if (iter == 1)
 		{
@@ -419,28 +407,36 @@ int main()
 
 			fclose(out1);
 		}
-        
-		
+#endif      
+
 		// SVD decomposition
 		LAPACKE_dgesvd(LAPACK_ROW_MAJOR, 'A', 'A', size, nprm, A, lda, sing, u, ldu, vt, ldvt, superb);
 
 		// singular values in array SING; arrays U and VT - ortogonal matrices from U * SIGMA * VT * q = f
+#ifdef DEBUG
 		printf("\nSingular values:\n");
 		for (int i = 0; i < nprm; i++)
 			printf("%5.4lf\n", sing[i]);
+#endif
 
 		// fulfilling of right part F
 #pragma omp parallel for simd schedule(simd:static)
 		for (int i = 0; i < size; i++)
 		{
 			int i2 = i / 2;
-			//	if (i%2==0) f[i] = X_exact[0][i/2] - X_app[0][i/2];
-			//	else f[i] = X_exact[1][int(i/2.0-0.5)] - X_app[1][int(i/2.0-0.5)];
 
+			// the difference between 
+			// measurements of direct problem for approximate data and
+			// measurements of direct problem for exact data
 			if (i % 2 == 0) f[i] = X_meas[0][i2] - X_app_meas[0][i2];
 			else f[i] = X_meas[1][int(i2 - 0.5)] - X_app_meas[1][int(i2 - 0.5)];
+
+			// such type of f[i] is explained by type of matrix A
+			// the first row - for X[0], the second row - for X[1]
+			// but all measurements (from 0 to N_t) should be used
 		}
 
+#ifdef DEBUG
 		// some output
 		if (iter == 1)
 		{
@@ -475,7 +471,7 @@ int main()
 			}
 			fclose(out1);
 		}
-
+#endif
 
 		// computing g = UT * f
 		cblas_dgemv(CblasRowMajor, CblasTrans, size, size, 1.0, u, ldu, f, 1, 0.0, g, 1);
@@ -492,27 +488,26 @@ int main()
 		{
 			printf("\nUnknown delta-vector of parameters q:\n");
 			for (int i = 0; i < nprm; i++)
-			printf("%5.4lf\n", q[i]);
+				printf("%5.4lf\n", q[i]);
 		}
 
 		printf("\nUnknown vector of parameters q:\n");
 		for (int i = 0; i < nprm; i++)
 			printf("gained: %5.4lf exact: %5.4lf\n", q[i] + prm_app[i], prm_ex[i]);
 
-		norm1 = 0, norm2 = 0;
-
 		for (int i = 0; i < nprm; i++)
 		{
-			prm_app[i] = q[i] + prm_app[i];
-			norm1 += (prm_app[i] - prm_ex[i])*(prm_app[i] - prm_ex[i]);
-			norm2 += prm_ex[i] * prm_ex[i];
+			prm_app[i] += q[i];
+			prm_diff[i] = prm_app[i] - prm_ex[i];
 		}
+
+		norm1 = cblas_dnrm2(nprm, prm_diff, 1);
+		norm2 = cblas_dnrm2(nprm, prm_ex, 1);
 			
-		norm1 = sqrt(norm1) / sqrt(norm2);
+		norm1 = norm1 / norm2;
 
 		fprintf(convergence, "%d %lf\n", iter, norm1);
-		printf("norma %lf\n", norm1);
-		//if (iter == 1) system("pause");
+		printf("norm: %lf\n", norm1);
 
 	} while (norm1 > eps);
 	
@@ -529,15 +524,15 @@ int main()
 
 	delete[] y;
 	delete[] y_init;
+	
+	delete[] prm_diff;
+	delete[] prm_app;
+	delete[] prm_ex;
 
 	delete[] A;
 
 	delete[] M_i;
 	delete[] P_i;
-
-	delete[] M_res;
-	delete[] P_res;
-	delete[] M_help;
 
 	delete[] sing;
 	delete[] u;
@@ -562,12 +557,8 @@ int main()
 	delete[] X_app_meas;
 	delete[] X_exact;
 
-
-
 	system("pause");
 	return 0;
-
-
 }
 
 #endif
